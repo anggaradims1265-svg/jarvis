@@ -1,3 +1,4 @@
+
 name: build
 
 on:
@@ -6,10 +7,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,14 +31,22 @@ jobs:
       - name: Accept Android SDK licenses + install NDK/CMake
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0" >/dev/null
-          echo "ndk.dir=$ANDROID_HOME/ndk/27.0.12077973" >> local.properties
+
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+          touch local.properties
+          if ! grep -q '^ndk.dir=' local.properties; then
+            echo "ndk.dir=$ANDROID_HOME/ndk/27.0.12077973" >> local.properties
+          fi
 
       - name: Build debug APK + unit tests
         run: ./gradlew assembleDebug testDebugUnitTest --no-daemon --stacktrace
 
-      # R8/JNI breakage class (the v1.5.0 test-button bug) only appears in the
-      # minified variant - build it here so it fails BEFORE a release publishes.
+      # Verify minified release variant before publishing.
       - name: Build minified release (CI gate)
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
@@ -42,6 +55,16 @@ jobs:
         with:
           name: jarvis-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload test results
         if: always()
@@ -50,6 +73,7 @@ jobs:
           name: test-results
           path: app/build/test-results/**/*.xml
           if-no-files-found: ignore
+          retention-days: 7
 
       - name: Notify Telegram on failure
         if: failure()
@@ -58,6 +82,13 @@ jobs:
           BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          curl -s -X POST "https://api.telegram.org/bot${BOT}/sendMessage" \
-            -d chat_id="${CHAT}" \
-            -d text="⚠️ JARVIS CI build FAILED on ${{ github.sha }} — check https://github.com/ansaribilal14/jarvis/actions"
+          if [ -z "$BOT" ] || [ -z "$CHAT" ]; then
+            echo "Telegram secrets are not configured. Skipping notification."
+            exit 0
+          fi
+
+          curl --fail --silent --show-error \
+            -X POST "https://api.telegram.org/bot${BOT}/sendMessage" \
+            -d "chat_id=${CHAT}" \
+            --data-urlencode "text=⚠️ JARVIS CI build FAILED on ${GITHUB_SHA} — check https://github.com/ansaribilal14/jarvis/actions"
+            
