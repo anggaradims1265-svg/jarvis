@@ -212,11 +212,43 @@ object AgentEngine {
 
     /** CAS the single task slot; the loser coroutine is cancelled, never double-run. */
     private fun launchTask(block: suspend () -> Unit): Boolean {
-        val j = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch { block() }
-        return if (job.compareAndSet(null, j)) true else {
-            j.cancel()
-            false
+    lateinit var newJob: Job
+
+    newJob = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.Dispatchers.Default
+    ).launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+        try {
+            block()
+        } finally {
+            // Clear task slot after completion or cancellation.
+            job.compareAndSet(newJob, null)
+            Logx.i(TAG, "Task slot released")
         }
+    }
+
+    while (true) {
+        val current = job.get()
+
+        // Another task is still running.
+        if (current?.isActive == true) {
+            newJob.cancel()
+            Logx.w(TAG, "Task slot busy - refusing duplicate task")
+            return false
+        }
+
+        // Remove a completed or cancelled job left in the slot.
+        if (current != null) {
+            job.compareAndSet(current, null)
+            continue
+        }
+
+        // Claim the slot before starting the coroutine.
+        if (job.compareAndSet(null, newJob)) {
+            newJob.start()
+            Logx.i(TAG, "Task started")
+            return true
+        }
+    }
     }
 
     /**
