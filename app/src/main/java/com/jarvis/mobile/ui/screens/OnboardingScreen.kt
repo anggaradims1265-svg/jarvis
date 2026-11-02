@@ -1,6 +1,6 @@
-
 package com.jarvis.mobile.ui.screens
 
+import androidx.compose.foundation.layout.width
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -500,4 +500,143 @@ fun OnboardingScreen(onDone: () -> Unit) {
 
                 var result by remember { mutableStateOf("") }
                 
-     
+                     Button(
+                    onClick = {
+                        val service = JarvisAccessibilityService.INSTANCE
+
+                        result = when {
+                            !isJarvisAccessibilityEnabled(context) ->
+                                "Accessibility belum aktif. Aktifkan melalui Settings terlebih dahulu."
+
+                            service == null ->
+                                "Accessibility aktif, tetapi servicenya belum terhubung. Coba kembali setelah beberapa detik."
+
+                            else -> {
+                                val observation = runCatching {
+                                    service.observe()
+                                }.getOrNull()
+
+                                if (observation == null) {
+                                    "JARVIS belum bisa membaca layar. Coba lagi."
+                                } else {
+                                    buildString {
+                                        appendLine("Screen reading berhasil!")
+                                        appendLine("Package: ${observation.packageName ?: "Unknown"}")
+                                        appendLine("Activity: ${observation.activityName ?: "Unknown"}")
+                                        appendLine()
+                                        observation.elements.take(25).forEach { element ->
+                                            val content = element.text
+                                                ?: element.desc
+                                                ?: "(tanpa teks)"
+                                            appendLine(
+                                                "${element.idx}. [${element.role}] $content"
+                                            )
+                                        }
+
+                                        if (observation.elements.isEmpty()) {
+                                            appendLine("Tidak ada teks atau elemen yang terbaca.")
+                                        }
+
+                                        if (observation.truncated) {
+                                            appendLine()
+                                            appendLine("Catatan: hasil dibatasi karena terlalu banyak elemen.")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = a11y
+                ) {
+                    Text("Read this screen")
+                }
+
+                if (result.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Text(
+                            result,
+                            modifier = Modifier.padding(14.dp),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                Text(
+                    "Setup is complete. You can change permissions and model settings later.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (step > 0) {
+                OutlinedButton(
+                    onClick = { step-- }
+                ) {
+                    Text("Back")
+                }
+            } else {
+                Spacer(Modifier.width(1.dp))
+            }
+
+            if (step < 4) {
+                Button(
+                    onClick = { step++ }
+                ) {
+                    Text("Continue")
+                }
+            } else {
+                Button(
+                    onClick = onDone
+                ) {
+                    Text("Finish Setup")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Checks Android's persisted Accessibility setting.
+ * This is different from checking whether the service is currently connected.
+ */
+private fun isJarvisAccessibilityEnabled(context: Context): Boolean {
+    val component = ComponentName(
+        context,
+        JarvisAccessibilityService::class.java
+    )
+
+    val accessibilityEnabled = runCatching {
+        Settings.Secure.getInt(
+            context.contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            0
+        ) == 1
+    }.getOrDefault(false)
+
+    if (!accessibilityEnabled) return false
+
+    val enabledServices = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+
+    return enabledServices.split(':').any { service ->
+        ComponentName.unflattenFromString(service) == component
+    }
+}
