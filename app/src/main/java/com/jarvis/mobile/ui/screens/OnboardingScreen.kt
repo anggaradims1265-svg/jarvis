@@ -1,5 +1,12 @@
 package com.jarvis.mobile.ui.screens
 
+import android.content.ComponentName
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -65,7 +72,26 @@ fun OnboardingScreen(onDone: () -> Unit) {
     val recommended = remember { ModelCatalog.recommendFor(profile) }
     val downloadStates by container.modelManager.states.collectAsState()
     val loadState by container.modelManager.loadState.collectAsState()
-    val a11y by JarvisAccessibilityService.CONNECTED.collectAsState()
+    var a11y by remember {
+    mutableStateOf(isJarvisAccessibilityEnabled(context))
+}
+
+val lifecycleOwner = LocalLifecycleOwner.current
+
+DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+            a11y = isJarvisAccessibilityEnabled(context)
+        }
+    }
+
+    lifecycleOwner.lifecycle.addObserver(observer)
+    a11y = isJarvisAccessibilityEnabled(context)
+
+    onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+}
 
     val loadingModelId = (loadState as? ModelManager.LoadState.Loading)?.modelId
     val activeModelId = (loadState as? ModelManager.LoadState.Loaded)?.modelId
@@ -252,5 +278,30 @@ fun OnboardingScreen(onDone: () -> Unit) {
             if (step < 4) Button(onClick = { step++ }, enabled = step != 3 || a11y || true) { Text("Next") }
         }
         Spacer(Modifier.height(30.dp))
+    }
+}
+private fun isJarvisAccessibilityEnabled(
+    context: android.content.Context
+): Boolean {
+    val masterEnabled = Settings.Secure.getInt(
+        context.contentResolver,
+        Settings.Secure.ACCESSIBILITY_ENABLED,
+        0
+    ) == 1
+
+    if (!masterEnabled) return false
+
+    val enabledServices = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+
+    val target = ComponentName(
+        context,
+        JarvisAccessibilityService::class.java
+    )
+
+    return enabledServices.split(':').any { service ->
+        ComponentName.unflattenFromString(service) == target
     }
 }
